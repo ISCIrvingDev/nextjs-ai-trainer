@@ -1,0 +1,3 @@
+  // En el Dashboard de Clerk (metodo de Auth)
+* El nombre de su proyecto es "CodeFlex YT", el mio es "AI Trainer"
+* El utiliza las opciones de "Email", "Google" y "Github", yo "Email", "Phone Number", "Google", "Facebook" y "Microsoft"
