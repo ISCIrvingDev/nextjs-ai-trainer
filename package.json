@@ -6,17 +6,20 @@
     "dev": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "deploy-convex": "npx convex dev"
   },
   "dependencies": {
     "@clerk/nextjs": "^6.21.0",
     "@vapi-ai/web": "^2.3.5",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "convex": "^1.24.8",
     "lucide-react": "^0.514.0",
     "next": "15.3.3",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "svix": "^1.67.0",
     "tailwind-merge": "^3.3.0"
   },
   "devDependencies": {
