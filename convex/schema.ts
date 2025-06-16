@@ -10,7 +10,8 @@ export default defineSchema({
   }).index("by_clerk_id", ["clerkId"]),
 
   plans: defineTable({
-    userId: v.id("users"),
+    // userId: v.id("users"), // Se tuvo que cambiar a String ya que en "convex\plans.ts" salia "Error (TS2345)" con la propiedad "args"
+    userId: v.string(),
     name: v.string(),
     workoutPlan: v.object({
       schedule: v.array(v.string()),

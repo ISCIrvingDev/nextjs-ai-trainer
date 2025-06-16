@@ -4,7 +4,54 @@ import { Webhook } from "svix";
 import { api } from "./_generated/api";
 import { httpAction } from "./_generated/server";
 
+// * Gemini AI
+import { GoogleGenerativeAI } from "@google/generative-ai";
+
 const http = httpRouter();
+
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+
+// Valida y arregla el plan de entrenamiento para asegurarse de que tiene los tipos numericos apropiados
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function validateWorkoutPlan(plan: any) {
+  const validatedPlan = {
+    schedule: plan.schedule,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    exercises: plan.exercises.map((exercise: any) => ({
+      day: exercise.day,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      routines: exercise.routines.map((routine: any) => ({
+        name: routine.name,
+        sets:
+          typeof routine.sets === "number"
+            ? routine.sets
+            : parseInt(routine.sets) || 1,
+        reps:
+          typeof routine.reps === "number"
+            ? routine.reps
+            : parseInt(routine.reps) || 10,
+      })),
+    })),
+  };
+
+  return validatedPlan;
+}
+
+// Valida el plan de nutricion para asegurarse de que siga el esquema de manera estricta
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function validateDietPlan(plan: any) {
+  // Solamente mantenemos los campos que necesitamos
+  const validatedPlan = {
+    dailyCalories: plan.dailyCalories,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    meals: plan.meals.map((meal: any) => ({
+      name: meal.name,
+      foods: meal.foods,
+    })),
+  };
+
+  return validatedPlan;
+}
 
 http.route({
   path: "/clerk-webhook",
@@ -75,6 +122,178 @@ http.route({
     // * TODO: Crear el handler para el "user.updated"
 
     return new Response("Webhooks processed successfully", { status: 200 });
+  }),
+});
+
+http.route({
+  path: "/vapi/generate-program",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    try {
+      const payload = await request.json();
+
+      const {
+        user_id,
+        age,
+        weight,
+        height,
+        injuries,
+        fitness_goal,
+        workout_days,
+        fitness_level,
+        dietary_restrictions,
+      } = payload;
+
+      // Comunicacion con Gemini AI
+      const model = genAI.getGenerativeModel({
+        model: "gemini-2.0-flash-001",
+        generationConfig: {
+          temperature: 0.4, // Menor temperatura para salidas mas predecibles
+          topP: 0.9,
+          responseMimeType: "application/json", // Es el tipo de respuesta, en este caso un JSON
+        },
+      });
+
+      // Inicio - Prompt para el plan de entrenamiento --------------------------------------------------------------
+      const workoutPrompt = `You are an experienced fitness coach creating a personalized workout plan based on:
+        Age: ${age}
+        Height: ${height}
+        Weight: ${weight}
+        Injuries or limitations: ${injuries}
+        Available days for workout: ${workout_days}
+        Fitness goal: ${fitness_goal}
+        Fitness level: ${fitness_level}
+
+        As a professional coach:
+        - Consider muscle group splits to avoid overtraining the same muscles on consecutive days
+        - Design exercises that match the fitness level and account for any injuries
+        - Structure the workouts to specifically target the user's fitness goal
+
+        CRITICAL SCHEMA INSTRUCTIONS:
+        - Your output MUST contain ONLY the fields specified below, NO ADDITIONAL FIELDS
+        - "sets" and "reps" MUST ALWAYS be NUMBERS, never strings
+        - For example: "sets": 3, "reps": 10
+        - Do NOT use text like "reps": "As many as possible" or "reps": "To failure"
+        - Instead use specific numbers like "reps": 12 or "reps": 15
+        - For cardio, use "sets": 1, "reps": 1 or another appropriate number
+        - NEVER include strings for numerical fields
+        - NEVER add extra fields not shown in the example below
+
+        Return a JSON object with this EXACT structure:
+        {
+          "schedule": ["Monday", "Wednesday", "Friday"],
+          "exercises": [
+            {
+              "day": "Monday",
+              "routines": [
+                {
+                  "name": "Exercise Name",
+                  "sets": 3,
+                  "reps": 10
+                }
+              ]
+            }
+          ]
+        }
+
+        DO NOT add any fields that are not in this example. Your response must be a valid JSON object with no additional text.`;
+
+      // Obtener la respuesta de la AI
+      const workoutResult = await model.generateContent(workoutPrompt);
+      const workoutPlanText = workoutResult.response.text();
+
+      // Validar el input de la AI
+      const workoutPlan = validateWorkoutPlan(JSON.parse(workoutPlanText));
+      // Fin - Prompt para el plan de entrenamiento --------------------------------------------------------------
+
+      // Inicio - Prompt para el plan de nutricion ---------------------------------------------------------------
+      const dietPrompt = `You are an experienced nutrition coach creating a personalized diet plan based on:
+        Age: ${age}
+        Height: ${height}
+        Weight: ${weight}
+        Fitness goal: ${fitness_goal}
+        Dietary restrictions: ${dietary_restrictions}
+
+        As a professional nutrition coach:
+        - Calculate appropriate daily calorie intake based on the person's stats and goals
+        - Create a balanced meal plan with proper macronutrient distribution
+        - Include a variety of nutrient-dense foods while respecting dietary restrictions
+        - Consider meal timing around workouts for optimal performance and recovery
+
+        CRITICAL SCHEMA INSTRUCTIONS:
+        - Your output MUST contain ONLY the fields specified below, NO ADDITIONAL FIELDS
+        - "dailyCalories" MUST be a NUMBER, not a string
+        - DO NOT add fields like "supplements", "macros", "notes", or ANYTHING else
+        - ONLY include the EXACT fields shown in the example below
+        - Each meal should include ONLY a "name" and "foods" array
+
+        Return a JSON object with this EXACT structure and no other fields:
+        {
+          "dailyCalories": 2000,
+          "meals": [
+            {
+              "name": "Breakfast",
+              "foods": ["Oatmeal with berries", "Greek yogurt", "Black coffee"]
+            },
+            {
+              "name": "Lunch",
+              "foods": ["Grilled chicken salad", "Whole grain bread", "Water"]
+            }
+          ]
+        }
+
+        DO NOT add any fields that are not in this example. Your response must be a valid JSON object with no additional text.`;
+
+      // Obtener la respuesta de la AI
+      const dietResult = await model.generateContent(dietPrompt);
+      const dietPlanText = dietResult.response.text();
+
+      // Validar el input de la AI
+      const dietPlan = validateDietPlan(JSON.parse(dietPlanText));
+      // Fin - Prompt para el plan de nutricion ---------------------------------------------------------------
+
+      // Inicio - Guardar los planes de entrenamiento y nutricion en la BD (Convex) ---------------------------
+      const planId = await ctx.runMutation(api.plans.createPlan, {
+        userId: user_id,
+        workoutPlan,
+        dietPlan,
+        isActive: true,
+        name: `${fitness_goal} Plan - ${new Date().toLocaleDateString()}`,
+      });
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          data: {
+            planId,
+            workoutPlan,
+            dietPlan,
+          },
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        }
+      );
+      // Fin - Guardar los planes de entrenamiento y nutricion en la BD (Convex) ---------------------------
+    } catch (error) {
+      console.log("Error al crear el plan de entrenamiento: ", error);
+
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+        {
+          status: 500,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        }
+      );
+    }
   }),
 });
 
